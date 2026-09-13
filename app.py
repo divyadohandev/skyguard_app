@@ -18,8 +18,8 @@ st_autorefresh(
 # FASTAPI BACKEND CONNECTION
 # ------------------------------------------------------------
 
-LATEST_API_URL = "http://127.0.0.1:8000/api/v1/latest"
-
+API_BASE_URL = "https://skyguard-app-xeak.onrender.com"
+LATEST_API_URL = f"{API_BASE_URL}/api/v1/latest"
 
 def fetch_latest_status():
     try:
