@@ -5,3 +5,6 @@ plotly
 pydeck
 requests
 streamlit-autorefresh
+fastapi
+uvicorn
+pydantic
