@@ -2,6 +2,7 @@ import numpy as np
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from ml_engine.anomaly_model import WeatherAnomalyModel
 
 app = FastAPI(title="SkyGuard AI Anomaly Engine")
 
@@ -28,6 +29,21 @@ class SensorInput(BaseModel):
 latest_telemetry = {}
 latest_result = {}
 
+# ------------------------------------------------------------
+# ML ANOMALY MODEL
+# ------------------------------------------------------------
+
+np.random.seed(42)
+
+normal_training_data = np.column_stack([
+    np.random.normal(28, 3, 1000),      # Temperature
+    np.random.normal(60, 8, 1000),      # Humidity
+    np.random.normal(1011, 3, 1000)     # Pressure
+])
+
+ml_model = WeatherAnomalyModel()
+ml_model.train(normal_training_data)
+
 
 def calculate_dew_point(temp: float, humidity: float) -> float:
     a, b = 17.27, 237.7
@@ -52,26 +68,53 @@ def detect_anomaly(data: SensorInput):
         data.humidity
     )
 
+    # ML anomaly detection
+    ml_result = ml_model.predict(
+        data.temperature,
+        data.humidity,
+        data.pressure
+    )
+
+    ml_anomaly = ml_result["is_anomaly"]
+    ml_score = ml_result["anomaly_score"]
+
+    # Physics-based validation
     physics_fault = dew_point > data.temperature
 
+    # Physical temperature bounds
     bounds_fault = (
         data.temperature > 50.0
         or data.temperature < -10.0
     )
 
-    is_anomaly = physics_fault or bounds_fault
+    # Final hybrid decision
+    is_anomaly = bool(
+    ml_anomaly
+    or physics_fault
+    or bounds_fault
+    )
 
-    # Dynamic XAI Attribution
     shap_scores = {
-        "Temperature Rate-of-Change": 0.52 if is_anomaly else 0.02,
-        "Dew-Point Violation Score": 0.38 if physics_fault else -0.01,
-        "Spatial Residual Error": 0.21 if is_anomaly else -0.04,
+        "Temperature Rate-of-Change": (
+            0.52 if is_anomaly else 0.02
+        ),
+        "Dew-Point Violation Score": (
+            0.38 if physics_fault else -0.01
+        ),
+        "Spatial Residual Error": (
+            0.21 if is_anomaly else -0.04
+        ),
         "Pressure Shift": -0.03,
     }
 
     result = {
         "station_id": data.station_id,
+
         "is_anomaly": is_anomaly,
+
+        "ml_detected": bool(ml_anomaly),
+
+        "ml_anomaly_score": float(ml_score),
 
         "classification": (
             "Thermal Spike / ADC Surge Fault"

@@ -2,7 +2,7 @@ import random
 import time
 import requests
 
-API_URL = "http://127.0.0.1:8000/api/v1/detect"
+API_URL = "https://skyguard-app-xeak.onrender.com/api/v1/detect"
 
 print("📡 Starting SkyGuard Telemetry Simulator Stream...")
 
