@@ -33,16 +33,11 @@ latest_result = {}
 # ML ANOMALY MODEL
 # ------------------------------------------------------------
 
-np.random.seed(42)
-
-normal_training_data = np.column_stack([
-    np.random.normal(28, 3, 1000),      # Temperature
-    np.random.normal(60, 8, 1000),      # Humidity
-    np.random.normal(1011, 3, 1000)     # Pressure
-])
-
 ml_model = WeatherAnomalyModel()
-ml_model.train(normal_training_data)
+
+ml_model.train_from_csv(
+    "ml_engine/weather_normal_data.csv"
+)
 
 
 def calculate_dew_point(temp: float, humidity: float) -> float:
@@ -117,9 +112,15 @@ def detect_anomaly(data: SensorInput):
         "ml_anomaly_score": float(ml_score),
 
         "classification": (
-            "Thermal Spike / ADC Surge Fault"
-            if is_anomaly
-            else "NOMINAL"
+        "Thermal Spike / ADC Surge Fault"
+        if data.temperature > 50
+        else "Humidity Sensor Fault"
+        if data.humidity > 95 or data.humidity < 10
+        else "Pressure Sensor Drift"
+        if data.pressure > 1025 or data.pressure < 995
+        else "General Sensor Anomaly"
+        if is_anomaly
+        else "NOMINAL"
         ),
 
         "confidence_score": (

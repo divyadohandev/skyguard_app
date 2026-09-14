@@ -220,10 +220,10 @@ if backend_available:
     latest_temp = live_telemetry["temperature"]
     latest_hum = live_telemetry["humidity"]
     latest_pres = live_telemetry["pressure"]
-
+    
     is_current_fault = backend_result.get(
-        "is_anomaly",
-        False
+    "is_anomaly",
+    False
     )
 
 else:
@@ -361,19 +361,36 @@ with col_map:
     )
     st.pydeck_chart(r)
 
+
 with col_alerts:
     st.subheader("🚨 Real-Time Alert Log")
 
     if is_current_fault:
-        st.markdown("""
+
+        fault_type = backend_result.get(
+            "classification",
+            "General Sensor Anomaly"
+        )
+
+        spatial_check = backend_result.get(
+            "spatial_buddy_check",
+            "Check unavailable"
+        )
+
+        st.markdown(f"""
             <div class='alert-critical'>
-                <strong>[CRITICAL] Thermal Spike Fault Detected</strong><br>
-                <small>AWS-IND-001 | Live Backend Detection</small><br>
-                Temperature anomaly detected. Spatial buddy consensus failed.
+                <strong>[CRITICAL] {fault_type}</strong><br>
+                <small>{selected_station_id} | Live Backend Detection</small><br>
+                Spatial Buddy Check: {spatial_check}
             </div>
         """, unsafe_allow_html=True)
+
     else:
-        st.success("✓ No critical alerts actively triggered for this node.")
+
+        st.success(
+            "✓ No critical alerts actively triggered for this node."
+        )
+
 
 # -------------------------------------------------------------------
 # 6. TIME-SERIES ANALYTICS & SELF-HEALING IMPUTATION
