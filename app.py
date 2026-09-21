@@ -18,7 +18,7 @@ except ImportError:
 # ================================================================
 st.set_page_config(
     page_title="SkyGuard AI — AWS Network Control",
-    page_icon="📡",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -266,7 +266,7 @@ def generate_telemetry_stream(station_id, n_points=90):
 # ================================================================
 stations_df = load_station_network()
 
-st.sidebar.title("📡 SkyGuard AI Ops")
+st.sidebar.title("SkyGuard AI Ops")
 st.sidebar.caption("MoES / IMD Weather Station Quality Control")
 
 selected_station_id = st.sidebar.selectbox(
@@ -279,19 +279,61 @@ selected_station_id = st.sidebar.selectbox(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("🎛️ Presentation Mode")
+st.sidebar.subheader("Presentation Mode")
 
-# Interactive toggle allowing you to trigger or suppress the live backend spike on demand
+# Interactive controls for demonstration anomaly injection
 force_fault = st.sidebar.checkbox(
-    "Inject Sensor Anomaly (+35°C Spike)",
+    "Inject Sensor Anomaly",
     value=False,
-    help="Enable this during your presentation to showcase live fault detection and self-healing imputation to the judges."
+    help="Enable this during your presentation to demonstrate live anomaly detection."
+)
+
+anomaly_parameter = st.sidebar.selectbox(
+    "Anomaly Parameter",
+    options=["Temperature", "Humidity", "Pressure"],
+    help="Choose which sensor parameter should receive the demonstration anomaly."
+)
+
+anomaly_values = {
+    "Temperature": 60.0,
+    "Humidity": 2.0,
+    "Pressure": 980.0,
+}
+
+if force_fault:
+    st.sidebar.number_input(
+        f"{anomaly_parameter} Anomaly Value",
+        value=float(anomaly_values[anomaly_parameter]),
+        step=0.1,
+        key="anomaly_value",
+        help="Set the value that will be injected into the selected parameter."
+    )
+
+freeze_reading = st.sidebar.checkbox(
+    "Simulate Frozen Reading",
+    value=False,
+    help="Keep one selected sensor parameter at exactly the same value across consecutive telemetry samples to demonstrate a stuck/frozen sensor."
+)
+
+freeze_parameter = st.sidebar.selectbox(
+    "Frozen Parameter",
+    options=["Temperature", "Humidity", "Pressure"],
+    disabled=not freeze_reading,
+    help="Choose which sensor parameter will remain unchanged."
 )
 
 use_live_backend = st.sidebar.checkbox(
     "Connect Live Render API",
     value=True
 )
+
+if freeze_reading:
+    current_freeze_value = float(st.session_state.get("frozen_value", 0.0))
+    current_freeze_count = int(st.session_state.get("freeze_count", 0))
+    st.sidebar.info(
+        f"Frozen {freeze_parameter}: {current_freeze_value:.1f} | "
+        f"Consecutive samples: {current_freeze_count}"
+    )
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Fleet Status Summary")
@@ -314,6 +356,32 @@ target_station = stations_df[
 
 telemetry_df = generate_telemetry_stream(selected_station_id)
 
+# Keep the frozen value in session state so Streamlit reruns do not change it.
+if freeze_reading and not st.session_state.get("freeze_was_active", False):
+    initial_column = {
+        "Temperature": "temperature",
+        "Humidity": "humidity",
+        "Pressure": "pressure",
+    }[freeze_parameter]
+    st.session_state["frozen_parameter"] = freeze_parameter
+    st.session_state["frozen_value"] = float(telemetry_df[initial_column].iloc[-1])
+    st.session_state["freeze_count"] = 0
+elif freeze_reading and st.session_state.get("frozen_parameter") != freeze_parameter:
+    initial_column = {
+        "Temperature": "temperature",
+        "Humidity": "humidity",
+        "Pressure": "pressure",
+    }[freeze_parameter]
+    st.session_state["frozen_parameter"] = freeze_parameter
+    st.session_state["frozen_value"] = float(telemetry_df[initial_column].iloc[-1])
+    st.session_state["freeze_count"] = 0
+
+if not freeze_reading:
+    st.session_state["freeze_was_active"] = False
+    st.session_state["freeze_count"] = 0
+else:
+    st.session_state["freeze_was_active"] = True
+
 live_data = fetch_latest_status() if use_live_backend else {"status": "NO_DATA"}
 
 backend_available = (
@@ -322,7 +390,7 @@ backend_available = (
     and live_data.get("telemetry", {}).get("station_id") == selected_station_id
 )
 
-if backend_available and not force_fault:
+if backend_available and not force_fault and not freeze_reading:
     live_telemetry = live_data.get("telemetry") or {}
     backend_result = live_data.get("result") or {}
 
@@ -339,26 +407,77 @@ if backend_available and not force_fault:
     telemetry_source = "LIVE BACKEND"
 
 elif force_fault:
-    # Triggered anomaly mode for demonstration
-    latest_temp = float(telemetry_df["temperature"].iloc[-1]) + 32.5  # Creates a distinct ~60°C spike
-    latest_hum = 12.0  # Sharp humidity drop
-    latest_pres = 1011.2
+    # Triggered anomaly mode for demonstration.
+    # The selected parameter receives the user-defined anomaly value.
+    latest_temp = float(telemetry_df["temperature"].iloc[-1])
+    latest_hum = float(telemetry_df["humidity"].iloc[-1])
+    latest_pres = float(telemetry_df["pressure"].iloc[-1])
+
+    injected_value = float(st.session_state.get("anomaly_value", anomaly_values[anomaly_parameter]))
+
+    if anomaly_parameter == "Temperature":
+        latest_temp = injected_value
+        classification = "Temperature Sensor Anomaly"
+    elif anomaly_parameter == "Humidity":
+        latest_hum = injected_value
+        classification = "Humidity Sensor Anomaly"
+    else:
+        latest_pres = injected_value
+        classification = "Pressure Sensor Anomaly"
+
     is_current_fault = True
 
     backend_result = {
         "is_anomaly": True,
-        "classification": "THERMAL DRIFT & HARD FAULT",
+        "classification": classification,
         "confidence_score": 0.98,
-        "spatial_buddy_check": "FAILED — Nearby AWS nodes report 28.2°C (Discrepancy: +32.3°C)",
-        "action_required": "Flag data stream for imputation; dispatch field engineer.",
-        "shap_scores": {
-            "Temperature Deviation": 32.5,
-            "Spatial Discrepancy": 28.2,
-            "Humidity Drop": 15.0,
-            "Pressure Check": 0.1
+        "spatial_buddy_check": "FAILED — Demonstration anomaly injected into selected parameter.",
+        "action_required": "Flag data stream for imputation; inspect/calibrate the affected sensor.",
+        "feature_contributions": {
+            f"{anomaly_parameter} Deviation": abs(injected_value - float(
+                telemetry_df[{"Temperature": "temperature", "Humidity": "humidity", "Pressure": "pressure"}[anomaly_parameter]].iloc[-1]
+            )),
+            "ML Anomaly Signal": 1.0,
         },
     }
-    telemetry_source = "DEMO FAULT INJECTION"
+    telemetry_source = f"DEMO {anomaly_parameter.upper()} FAULT INJECTION"
+
+elif freeze_reading:
+    # Simulate a stuck sensor: one parameter remains exactly unchanged while
+    # the other parameters continue to use the current stream values.
+    latest_temp = float(telemetry_df["temperature"].iloc[-1])
+    latest_hum = float(telemetry_df["humidity"].iloc[-1])
+    latest_pres = float(telemetry_df["pressure"].iloc[-1])
+
+    frozen_value = float(st.session_state.get("frozen_value", latest_temp))
+    if freeze_parameter == "Temperature":
+        latest_temp = frozen_value
+    elif freeze_parameter == "Humidity":
+        latest_hum = frozen_value
+    else:
+        latest_pres = frozen_value
+
+    st.session_state["freeze_count"] = int(st.session_state.get("freeze_count", 0)) + 1
+    freeze_count = st.session_state["freeze_count"]
+
+    is_current_fault = freeze_count >= 3
+    backend_result = {
+        "is_anomaly": is_current_fault,
+        "classification": (
+            f"Frozen {freeze_parameter} Sensor" if is_current_fault else "Monitoring for Frozen Reading"
+        ),
+        "confidence_score": 0.96 if is_current_fault else 0.50,
+        "spatial_buddy_check": "PASSED — Freeze pattern is local to the selected sensor parameter.",
+        "action_required": (
+            "Flag reading stream, use estimated replacement, and inspect/calibrate the affected sensor."
+            if is_current_fault else "Continue monitoring consecutive readings for a frozen-value pattern."
+        ),
+        "feature_contributions": {
+            "Frozen Reading Pattern": 1.0 if is_current_fault else 0.0,
+            "Temporal Discontinuity": 1.0 if is_current_fault else 0.0,
+        },
+    }
+    telemetry_source = f"DEMO FROZEN {freeze_parameter.upper()} READING"
 
 else:
     latest_temp = float(telemetry_df["temperature"].iloc[-1])
@@ -372,7 +491,7 @@ else:
         "confidence_score": 0.05,
         "spatial_buddy_check": "PASSED — Validated against 4 neighbor nodes",
         "action_required": "None",
-        "shap_scores": {},
+        "feature_contributions": {},
     }
     telemetry_source = "SYNTHETIC 3-HOUR STREAM"
 
@@ -469,7 +588,7 @@ health_score = calculate_health_score(latest_temp, latest_hum, latest_pres, is_c
 # ================================================================
 # 11. DASHBOARD HEADER
 # ================================================================
-st.title("🛡️ SkyGuard AI: AWS Real-Time Anomaly Engine")
+st.title("SkyGuard AI: AWS Real-Time Anomaly Engine")
 st.caption(
     f"Active Station Focus: **{target_station['name']} ({target_station['station_id']})** | "
     f"Lat: {target_station['lat']}° | Lon: {target_station['lon']}° | "
@@ -519,7 +638,7 @@ st.sidebar.info(
 col_map, col_alerts = st.columns([1.6, 1.0])
 
 with col_map:
-    st.subheader("🗺️ Spatial Buddy Network View")
+    st.subheader("Spatial Buddy Network View")
     view_state = pdk.ViewState(latitude=28.55, longitude=77.20, zoom=9.2, pitch=25)
 
     scatterplot_layer = pdk.Layer(
@@ -547,11 +666,13 @@ with col_map:
         layers=[scatterplot_layer, text_layer],
         initial_view_state=view_state,
         tooltip={"html": "<b>{name}</b><br>ID: {station_id}<br>Status: {status}<br>Elev: {elevation}m"},
+        # Keep map movement user-controlled: pan/zoom remain enabled,
+        # but no automatic animation or fly-to behaviour is configured.
     )
-    st.pydeck_chart(deck)
+    st.pydeck_chart(deck, height=500)
 
 with col_alerts:
-    st.subheader("🚨 Real-Time Alert Log")
+    st.subheader("Real-Time Alert Log")
     if is_current_fault:
         st.markdown(
             f"""
@@ -565,14 +686,14 @@ with col_alerts:
         )
         st.error(f"Action Required: {action_required}")
     else:
-        st.success("✓ No critical alerts actively triggered for this node.")
+        st.success("No critical alerts actively triggered for this node.")
 
 
 # ================================================================
 # 15. AUTOMATED DECISION PIPELINE
 # ================================================================
 st.markdown("---")
-st.subheader("🧠 Automated Decision Pipeline")
+st.subheader("Automated Decision Pipeline")
 p1, p2, p3, p4, p5 = st.columns(5)
 
 with p1:
@@ -593,7 +714,7 @@ with p5:
 # 16. TIME-SERIES ANALYTICS + SELF-HEALING (3-HOUR WINDOW)
 # ================================================================
 st.markdown("---")
-st.subheader("📊 3-Hour Telemetry Series & AI Self-Healing Imputation")
+st.subheader("3-Hour Telemetry Series & AI Self-Healing Imputation")
 
 def plot_telemetry(df, param_col, rec_col, unit):
     fig = go.Figure()
@@ -672,7 +793,7 @@ with tab3:
 # READINGS & DATA TABLE
 # ================================================================
 st.markdown("---")
-st.subheader("📋 Telemetry Readings (3-Hour Past Logs)")
+st.subheader("Telemetry Readings (3-Hour Past Logs)")
 
 # Show recent 10 records in tabular format
 formatted_df = telemetry_df.tail(10).copy()
@@ -710,7 +831,7 @@ st.dataframe(
 # 17. SELF-HEALING DECISION
 # ================================================================
 st.markdown("---")
-st.subheader("🛠️ Self-Healing Decision Summary")
+st.subheader("Self-Healing Decision Summary")
 
 heal_col1, heal_col2, heal_col3 = st.columns(3)
 
@@ -725,19 +846,19 @@ with heal_col3:
 
 if is_current_fault:
     st.warning(
-        f"🚨 Raw reading of **{latest_temp:.1f} °C** rejected due to anomaly detection. "
+        f"Raw reading of **{latest_temp:.1f} °C** rejected due to anomaly detection. "
         f"Downstream forecast models receive imputed estimate: **{estimated_temp:.1f} °C** "
         f"(RH: {estimated_hum:.1f}%, Pressure: {estimated_pres:.1f} hPa)."
     )
 else:
-    st.success("✓ Reading validated. No self-healing correction required.")
+    st.success("Reading validated. No self-healing correction required.")
 
 
 # ================================================================
 # 18. EXPLAINABLE AI (XAI) ATTRIBUTION
 # ================================================================
 st.markdown("---")
-st.subheader("💡 Explainable AI (XAI) Attribution")
+st.subheader("Explainable AI (XAI) Attribution")
 
 exp_col1, exp_col2 = st.columns([1, 1])
 
