@@ -1,349 +1,230 @@
-# 🌦️ SkyGuard AI — Intelligent Anomaly Detection for Automatic Weather Stations
+# SkyGuard AI
 
 > **SIH 2026 | Problem Statement 26073 | Disaster Management | Software**
->
-> An AI/ML-assisted quality-control and anomaly-detection system for Automatic Weather Station (AWS) telemetry.
 
-## 📌 Project Overview
+SkyGuard AI is a prototype quality-control and anomaly-detection system for Automatic Weather Station (AWS) telemetry. It combines an unsupervised machine-learning model with deterministic meteorological checks and a monitoring dashboard so that an unusual observation can be flagged, explained, and replaced with an estimated value for downstream use.
 
-**SkyGuard AI** is a prototype system designed to detect suspicious or anomalous observations coming from Automatic Weather Stations.
+The central design principle is simple:
 
-It combines **machine learning with multiple quality-control checks** instead of relying on a single anomaly detector.
+> An extreme reading is not automatically a faulty reading.
 
-### Core idea
+A single station reporting 58 °C while nearby stations remain near 28 °C may have a sensor problem. Several nearby stations reporting the same extreme may instead indicate a genuine regional event. SkyGuard AI is designed to provide evidence for that distinction. The current repository is a demonstration prototype using synthetic training data and configured demo stations; it is not an operational IMD system.
 
-> **An extreme reading should not automatically be treated as a sensor fault.**
+## Contents
 
-For example, if one station reports **58°C** while nearby stations are around 28°C, it may indicate a sensor problem. If several nearby stations report similarly high temperatures, it may represent a genuine regional extreme.
+- [What the prototype does](#what-the-prototype-does)
+- [Architecture](#architecture)
+- [Repository structure](#repository-structure)
+- [Technology stack](#technology-stack)
+- [ML and quality-control logic](#ml-and-quality-control-logic)
+- [API reference](#api-reference)
+- [Streamlit dashboard](#streamlit-dashboard)
+- [Telemetry simulator](#telemetry-simulator)
+- [Landing page](#landing-page)
+- [Local setup](#local-setup)
+- [Demo scenarios](#demo-scenarios)
+- [Tests](#tests)
+- [Transparency and limitations](#transparency-and-limitations)
+- [Future scope](#future-scope)
+- [Project information](#project-information)
 
-SkyGuard AI therefore considers **ML, physical limits, temporal behavior, and spatial/buddy evidence**.
+## What the prototype does
 
----
+SkyGuard AI processes three atmospheric measurements:
 
-## 🎯 Problem Statement
+| Field | Unit | Meaning |
+|---|---:|---|
+| `station_id` | identifier | Source AWS node |
+| `temperature` | °C | Ambient temperature |
+| `humidity` | % | Relative humidity |
+| `pressure` | hPa | Atmospheric pressure |
 
-### AI/ML-Based Intelligent Anomaly Detection for Automatic Weather Stations (AWS)
+For each submitted reading, the backend:
 
-The system aims to identify:
+1. Calculates dew point from temperature and relative humidity.
+2. Scores the three-value observation with an Isolation Forest trained on the bundled normal-weather dataset.
+3. Checks whether dew point is greater than ambient temperature.
+4. Checks whether temperature is outside the backend bounds of -10 °C to 50 °C.
+5. Combines the ML result and these rule checks into `is_anomaly`.
+6. Assigns a rule-based classification and recommended action.
+7. Stores the latest telemetry and result in process memory for the dashboard and landing page.
 
-1. Normal observations
-2. Possible sensor faults
-3. Sudden/unrealistic changes
-4. Spatially inconsistent observations
-5. Potential regional weather extremes
+The Streamlit dashboard adds presentation and demonstration behavior around this API: a five-station synthetic network, a stable three-hour telemetry series, anomaly injection, frozen-reading simulation, visual alerts, and rolling-median replacement values.
 
-It also provides an explanation and recommended operational action.
-
----
-
-## 💡 Solution Architecture
-
-```text
-AWS / ESP32 Sensor Data
-          ↓
-     Data Ingestion
-          ↓
-   Basic Validation
-          ↓
- ┌────────┴───────────┐
- ↓        ↓           ↓
-Physics  Temporal     Spatial
-Checks   Checks       / Buddy Check
- └────────┬───────────┘
-          ↓
-    Isolation Forest
-          ↓
-    Evidence Fusion
-          ↓
- Anomaly Classification
-          ↓
- Explanation + Confidence
-          ↓
- Self-Healing / Quarantine
-          ↓
-    Streamlit Dashboard
-```
-
----
-
-## ⭐ Key Features
-
-### 1. Real-Time Telemetry Processing
-
-The backend receives:
-
-- Temperature
-- Humidity
-- Pressure
-- Station ID
-- Timestamp
-- Sequence ID
-
-### 2. Machine Learning Anomaly Detection
-
-Uses **Isolation Forest** from Scikit-learn.
-
-It is an unsupervised model that identifies observations that are unusual compared with learned normal data.
-
-The ML model indicates that a sample is unusual; it does **not by itself prove that a sensor is broken**.
-
-### 3. Physics-Based QC
-
-Current prototype ranges:
-
-| Parameter | Prototype Range |
-|---|---:|
-| Temperature | -20°C to 50°C |
-| Humidity | 10% to 95% |
-| Pressure | 995 to 1025 hPa |
-
-These are prototype configuration values, not official IMD operational thresholds.
-
-### 4. Temporal Consistency
-
-Compares the current reading with the previous reading from the same station.
-
-Prototype warning thresholds include:
-
-- Temperature change > 10°C
-- Humidity change > 30%
-- Pressure change > 10 hPa
-
-### 5. Spatial / Buddy Check
-
-Compares a station with configured peer-station baselines.
-
-This helps distinguish:
+## Architecture
 
 ```text
-One station → extreme value
-Nearby stations → normal
-        ↓
-Possible sensor fault
+AWS device, simulator, or HTTP client
+                 |
+                 v
+       FastAPI POST /api/v1/detect
+                 |
+       Pydantic request validation
+                 |
+       +---------+----------+
+       |                    |
+       v                    v
+  Isolation Forest     Dew-point and
+  anomaly score        temperature rules
+       |                    |
+       +---------+----------+
+                 v
+       Hybrid anomaly decision
+                 |
+       Classification and action
+                 |
+       In-memory latest reading
+          /                 \
+         v                   v
+  Streamlit dashboard   Landing-page API checks
 ```
 
-from:
+The intended production direction is a persistent streaming architecture:
 
 ```text
-Several stations → similar extreme values
-        ↓
-Possible regional weather event
+AWS sensors -> edge gateway -> message broker -> QC/ML service
+            -> time-series database -> alerts -> operations dashboard
 ```
 
-The current peer data is prototype/hardcoded.
+That production architecture is not implemented in this repository yet.
 
-### 6. Evidence Fusion
-
-The decision combines:
-
-```text
-ML anomaly
-+ Physics failure
-+ Temporal discontinuity
-+ Spatial disagreement
-        ↓
-Anomaly decision
-```
-
-The current confidence score is a **prototype evidence score, not a calibrated probability**.
-
-### 7. Explainable Feature Contribution
-
-The dashboard shows which signals contributed to the decision.
-
-Example:
-
-```text
-ML Anomaly Signal       → Active
-Temporal Discontinuity  → Active
-Spatial Disagreement   → Active
-Temperature Violation  → Inactive
-```
-
-The current prototype uses feature-contribution indicators. It should **not be described as SHAP** unless SHAP is actually implemented.
-
-### 8. Fault Classification
-
-Prototype categories include:
-
-- Thermal Spike / ADC Surge Fault
-- Humidity Sensor Fault
-- Pressure Sensor Drift
-- General Sensor Anomaly
-
-### 9. Self-Healing / Data Recovery
-
-For anomalous data, the prototype can recommend:
-
-```text
-Quarantine original reading
-        ↓
-Estimate replacement value
-        ↓
-Use estimate downstream
-        ↓
-Inspect / calibrate sensor
-```
-
-This is **data-level recovery**, not physical sensor repair.
-
----
-
-## 🖥️ Dashboard
-
-The frontend uses **Streamlit**.
-
-It provides:
-
-- Active station information
-- Temperature, humidity and pressure
-- Anomaly status
-- Sensor health indicator
-- Historical telemetry
-- QC pipeline
-- Feature explanations
-- Recommended actions
-- Station/fleet visualization
-
----
-
-## 🔄 End-to-End Data Flow
-
-```text
-Sensor / ESP32
-     ↓
-Telemetry Packet
-     ↓
-FastAPI Backend
-     ↓
-Input Validation
-     ↓
-Physics QC
-     ↓
-Temporal QC
-     ↓
-Spatial QC
-     ↓
-Isolation Forest
-     ↓
-Evidence Fusion
-     ↓
-Classification
-     ↓
-Explanation / Action
-     ↓
-Streamlit Dashboard
-```
-
----
-
-## 🏗️ Technology Stack
-
-| Layer | Technology | Purpose |
-|---|---|---|
-| Frontend | Streamlit | Monitoring dashboard |
-| Backend | FastAPI | REST API |
-| API Server | Uvicorn | Runs FastAPI |
-| ML | Scikit-learn | Isolation Forest |
-| Data Processing | Pandas | Data handling |
-| Numerical Computing | NumPy | Numerical operations |
-| Visualization | Plotly | Charts |
-| Map/UI | PyDeck / Streamlit | Station visualization |
-| Telemetry Client | Requests | Simulator → API |
-| Edge Prototype | ESP32 | Future sensor source |
-| Deployment | Streamlit Cloud + Render | Hosting |
-| Language | Python | Main language |
-
----
-
-## 📁 Project Structure
+## Repository structure
 
 ```text
 skyguard_app/
-│
 ├── app.py
-│   └── Streamlit dashboard
-│
+│   └── Streamlit operations dashboard and demo controls
 ├── backend.py
-│   └── FastAPI backend
-│
+│   └── FastAPI application, request model, inference, and latest-state API
 ├── sensor_stream.py
-│   └── Telemetry simulator
-│
+│   └── Continuous HTTP telemetry simulator
+├── landing/
+│   └── index.html
+│       └── Static product/operations landing page with live API checks
 ├── ml_engine/
 │   ├── anomaly_model.py
-│   │   └── Isolation Forest model
-│   │
-│   └── weather_normal_data.csv
-│       └── Prototype normal training data
-│
+│   │   └── Reusable Isolation Forest wrapper
+│   ├── physics.py
+│   │   └── Dew-point calculation and physics violation helper
+│   ├── training_data.py
+│   │   └── Generates synthetic normal-weather CSV data
+│   ├── weather_normal_data.csv
+│   │   └── Bundled 5,000-row synthetic training dataset
+│   ├── test_model.py
+│   │   └── In-memory model smoke test
+│   └── test_real_model.py
+│       └── CSV-trained model smoke test
 ├── requirements.txt
-│   └── Python dependencies
-│
+│   └── Runtime Python dependencies
 ├── render.yaml
-│   └── Render configuration
-│
+│   └── Render definitions for backend and dashboard services
 └── .gitignore
-    └── Local/secrets exclusions
+    └── Python caches, environments, and local Streamlit secrets
 ```
 
----
+## Technology stack
 
-## 🧠 ML Model
+| Layer | Technology | Use in this repository |
+|---|---|---|
+| Language | Python | Backend, dashboard, simulator, and ML code |
+| API | FastAPI + Uvicorn | REST inference service |
+| Validation | Pydantic | `SensorInput` request schema |
+| ML | scikit-learn | Isolation Forest anomaly detection |
+| Data | Pandas + NumPy | Training data, telemetry, and calculations |
+| Dashboard | Streamlit | Live monitoring and demonstration UI |
+| Charts | Plotly | Three-hour telemetry and contribution charts |
+| Map | PyDeck | Synthetic station network view |
+| HTTP client | Requests | Dashboard and simulator API calls |
+| Refresh | streamlit-autorefresh | Ten-second dashboard reruns |
+| Static frontend | HTML, CSS, JavaScript | Landing page and API status view |
+| Hosting configuration | Render | Backend and dashboard service definitions |
 
-The Isolation Forest model uses:
+## ML and quality-control logic
 
-```text
-temperature
-humidity
-pressure
-```
+### Isolation Forest
 
-Current configuration:
+`ml_engine/anomaly_model.py` wraps scikit-learn's `IsolationForest` with:
 
 ```python
 IsolationForest(
     n_estimators=100,
     contamination=0.05,
-    random_state=42
+    random_state=42,
 )
 ```
 
-The current training dataset contains **5,000 synthetic normal observations**.
+The model uses these features, in this order:
 
-### ⚠️ Important
+```text
+temperature, humidity, pressure
+```
 
-The training data is synthetic and is **not official IMD historical AWS data**.
+The bundled `weather_normal_data.csv` contains 5,000 synthetic observations generated around approximate normal conditions. Its values are clipped to these generation ranges:
 
-Production deployment should use real AWS observations and labelled/validated fault cases.
+| Feature | Synthetic generation range |
+|---|---:|
+| Temperature | 15 °C to 40 °C |
+| Humidity | 20% to 95% |
+| Pressure | 995 hPa to 1025 hPa |
 
----
+The model returns `is_anomaly` and scikit-learn's raw `decision_function` value as `anomaly_score`. The score is not a probability, and the model has not been evaluated against a production-labelled fault dataset.
 
-## 🔌 API
+### Backend rule checks
 
-### Deployed Backend
+The implemented backend decision is:
+
+```text
+is_anomaly = ML anomaly OR dew-point violation OR temperature outside [-10, 50]
+```
+
+The backend does not currently implement a temporal comparison against a previous reading or a real peer-station calculation. It returns spatial-consensus wording for the prototype UI, but the current API response does not calculate that comparison from a station network.
+
+### Dashboard checks and recovery display
+
+The dashboard has additional display-side behavior:
+
+- A health score starts at 100 and subtracts points for prototype parameter bounds and an anomaly flag.
+- An anomaly reading is marked for replacement by the median of the preceding ten synthetic readings.
+- A three-hour window contains 90 two-minute points plus the latest resolved point.
+- The sidebar can inject a custom temperature, humidity, or pressure fault.
+- The sidebar can hold one parameter constant; after three reruns it displays a frozen-sensor anomaly.
+- Feature bars use backend `shap_scores` when present, but no SHAP library or SHAP explainer is implemented. These values are prototype attribution indicators.
+
+The replacement value is data-level imputation for demonstration. It does not repair a physical sensor.
+
+## API reference
+
+### Base URLs
+
+Local development:
+
+```text
+http://127.0.0.1:8000
+```
+
+Configured deployed backend:
 
 ```text
 https://skyguard-app-xeak.onrender.com
 ```
 
-### Swagger Documentation
+Interactive OpenAPI documentation:
 
 ```text
 https://skyguard-app-xeak.onrender.com/docs
 ```
 
-### OpenAPI
+Raw OpenAPI document:
 
 ```text
 https://skyguard-app-xeak.onrender.com/openapi.json
 ```
 
-### POST `/api/v1/detect`
+### `POST /api/v1/detect`
 
-Sends telemetry for analysis.
+Submit one telemetry reading. All four fields are required and must be numeric where applicable.
 
-Example:
+Request:
 
 ```json
 {
@@ -354,409 +235,373 @@ Example:
 }
 ```
 
-### GET `/api/v1/latest`
+Typical nominal response:
 
-Returns the latest processed reading.
+```json
+{
+  "station_id": "AWS-IND-001",
+  "is_anomaly": false,
+  "ml_detected": false,
+  "ml_anomaly_score": 0.12,
+  "classification": "NOMINAL",
+  "confidence_score": 0.995,
+  "spatial_buddy_check": "PASSED (Spatial Consensus Match)",
+  "action_required": "None",
+  "shap_scores": {
+    "Temperature Rate-of-Change": 0.02,
+    "Dew-Point Violation Score": -0.01,
+    "Spatial Residual Error": -0.04,
+    "Pressure Shift": -0.03
+  }
+}
+```
 
-### GET `/health`
+The exact ML score varies with the fitted model. `confidence_score` is a fixed prototype value (`0.995` for nominal and `0.942` for anomaly), not a calibrated confidence probability.
 
-Checks backend health and model status.
+An anomalous result can be classified as:
 
----
+- `Thermal Spike / ADC Surge Fault` when temperature is above 50 °C.
+- `Humidity Sensor Fault` when humidity is outside 10% to 95%.
+- `Pressure Sensor Drift` when pressure is outside 995 to 1025 hPa.
+- `General Sensor Anomaly` for other anomalous readings.
 
-## 🧪 Telemetry Simulator
+Note that the humidity and pressure classifications are rule-based labels; those bounds do not currently participate in the backend's `is_anomaly` expression unless the ML or dew-point check also flags the reading.
 
-`sensor_stream.py` simulates an AWS station.
+PowerShell example:
 
-It can inject a temperature fault such as:
+```powershell
+$body = @{
+  station_id = "AWS-IND-001"
+  temperature = 58.4
+  humidity = 63.5
+  pressure = 1011.0
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:8000/api/v1/detect" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $body
+```
+
+### `GET /api/v1/latest`
+
+Returns the most recently processed telemetry and result from the current backend process:
+
+```json
+{
+  "telemetry": {
+    "station_id": "AWS-IND-001",
+    "temperature": 28.4,
+    "humidity": 68.2,
+    "pressure": 1012.7
+  },
+  "result": {
+    "station_id": "AWS-IND-001",
+    "is_anomaly": false
+  }
+}
+```
+
+Before the first successful detection request, the endpoint returns:
+
+```json
+{
+  "status": "NO_DATA",
+  "message": "Waiting for sensor telemetry..."
+}
+```
+
+### CORS and state
+
+The API currently allows all origins, methods, headers, and credentials for prototype connectivity. Latest state is held in module-level dictionaries, so it is lost on restart and is not suitable for multi-worker or production use without persistence and a shared state layer.
+
+## Streamlit dashboard
+
+Run `app.py` to open the operations dashboard. It includes:
+
+- Station selector for five configured NCR demo nodes.
+- Temperature, humidity, pressure, station status, and health score metrics.
+- PyDeck spatial station map.
+- Five-stage visual decision pipeline: ingest, ML detection, physics, spatial display, and action.
+- Three-hour Plotly history with raw, anomaly, and imputed values.
+- Recent telemetry table.
+- XAI-style contribution chart and reasoning log.
+- Automatic refresh every 10 seconds.
+
+By default the dashboard attempts to read the deployed Render API. Turn off **Connect Live Render API** to use the local synthetic stream without a reachable backend. The dashboard also falls back to synthetic data when the selected station does not match the latest API station.
+
+The **Presentation Mode** controls are intentionally useful for demonstrations:
+
+- **Inject Sensor Anomaly** replaces one selected parameter with a custom value and displays an alert.
+- **Simulate Frozen Reading** holds one parameter constant and raises the demo fault after three refresh cycles.
+
+## Telemetry simulator
+
+`sensor_stream.py` continuously sends readings for `AWS-IND-001` to the deployed endpoint every three seconds. It generates:
+
+- Temperature between 24 °C and 32 °C for normal samples.
+- Humidity between 50% and 70%.
+- Pressure between 1008 hPa and 1014 hPa.
+- A 20% chance of replacing temperature with 58.4 °C.
+
+The script currently targets the deployed URL directly. For local testing, change `API_URL` in `sensor_stream.py` to `http://127.0.0.1:8000/api/v1/detect` before running it. Stop the process with `Ctrl+C`.
+
+## Landing page
+
+`landing/index.html` is a self-contained static page. It:
+
+- Presents the SkyGuard AI architecture and feature set.
+- Polls the backend latest endpoint every 10 seconds.
+- Sends a nominal sample to the detection endpoint every 30 seconds to show API status.
+- Opens the deployed dashboard inside a modal iframe or in a new tab.
+- Links to Swagger documentation and live latest telemetry.
+
+The landing page is configured for these deployed services:
 
 ```text
-Normal temperature → 24–32°C
-Injected fault      → 58.4°C
+Backend:   https://skyguard-app-xeak.onrender.com
+Dashboard: https://skyguard-dashboard-t737.onrender.com
 ```
 
-This allows the complete pipeline to be demonstrated without physical hardware.
+Because it is a static file, it can be opened directly in a browser or served by any static web server. Browser CORS behavior still depends on the backend's CORS configuration and the availability of the deployed services.
 
----
+## Local setup
 
-## 🌐 Current Deployment
+### Prerequisites
 
-### Streamlit Dashboard
+- Python 3.10 or newer is recommended.
+- PowerShell commands below assume Windows.
+- `pip` must be available for the selected Python interpreter.
+- A network connection is needed only when installing dependencies or using deployed services.
 
-```text
-https://skyguardapp-ykibmzfrwzv4h5ntoufrgx.streamlit.app/
-```
-
-### Render Backend
-
-```text
-https://skyguard-app-xeak.onrender.com
-```
-
-### Swagger
-
-```text
-https://skyguard-app-xeak.onrender.com/docs
-```
-
----
-
-## 💻 Local Setup
-
-### 1. Clone
-
-```bash
-git clone YOUR_GITHUB_REPOSITORY_URL
-cd skyguard_app
-```
-
-### 2. Create virtual environment
-
-Windows PowerShell:
+### 1. Create and activate a virtual environment
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 ```
 
-### 3. Install dependencies
+If PowerShell blocks activation for the current process:
 
 ```powershell
-pip install -r requirements.txt
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
 ```
 
-### 4. Start backend
+The repository's `.gitignore` excludes both `.venv/` and `venv/`.
+
+### 2. Install runtime dependencies
 
 ```powershell
-python -m uvicorn backend:app --reload --port 8000
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-Backend:
+`pytest` is not listed in `requirements.txt`; install it separately if you want to run the smoke-test files through pytest:
+
+```powershell
+python -m pip install pytest
+```
+
+### 3. Start the backend
+
+From the repository root:
+
+```powershell
+python -m uvicorn backend:app --reload --host 127.0.0.1 --port 8000
+```
+
+The model is trained from `ml_engine/weather_normal_data.csv` when `backend.py` is imported. Open these local URLs:
 
 ```text
-http://127.0.0.1:8000
+API:     http://127.0.0.1:8000
+Swagger: http://127.0.0.1:8000/docs
+OpenAPI: http://127.0.0.1:8000/openapi.json
+Latest:  http://127.0.0.1:8000/api/v1/latest
 ```
 
-Swagger:
+### 4. Start the dashboard
 
-```text
-http://127.0.0.1:8000/docs
-```
-
-### 5. Start dashboard
-
-Open a second PowerShell:
+Open a second PowerShell window, activate the same environment, and run:
 
 ```powershell
 python -m streamlit run app.py
 ```
 
-Dashboard:
+Streamlit normally opens:
 
 ```text
 http://localhost:8501
 ```
 
-### 6. Run simulator
+Enable **Connect Live Render API** only when you want to use the deployed backend. For a fully local flow, leave it disabled or update `API_BASE_URL` in `app.py` to the local API URL.
 
-For local testing, use:
+### 5. Send simulator traffic
 
-```text
-http://127.0.0.1:8000/api/v1/detect
-```
-
-Then:
+With the backend running, update `API_URL` in `sensor_stream.py` to the local endpoint if necessary, then run:
 
 ```powershell
 python sensor_stream.py
 ```
 
----
+The simulator is an infinite loop and prints each HTTP result. Start the dashboard after the simulator has posted at least one reading if you want the live backend path to be populated immediately.
 
-## 🧪 Demo Scenarios
+## Regenerating the synthetic dataset
 
-### Normal Weather
+To regenerate the bundled dataset:
 
-```text
-Temperature → Normal
-Humidity    → Normal
-Pressure    → Normal
-        ↓
-ACCEPTED
+```powershell
+python ml_engine/training_data.py
 ```
 
-### Isolated Temperature Spike
+Run this from the `ml_engine` directory if you want the output path to be exactly `ml_engine/weather_normal_data.csv`:
 
-```text
-Station A → 58°C
-Nearby stations → ~28°C
-        ↓
-ANOMALOUS
-Possible sensor fault
+```powershell
+Push-Location ml_engine
+python training_data.py
+Pop-Location
 ```
 
-### Sudden Change
+The script uses a fixed NumPy seed of 42 and creates 5,000 rows with the columns `temperature`, `humidity`, and `pressure`.
+
+## Demo scenarios
+
+### Nominal observation
 
 ```text
-Previous → 28°C
-Current  → 45°C
-        ↓
-Temporal warning
+Temperature, humidity, and pressure within the learned normal distribution
+                         |
+                         v
+                       NOMINAL
 ```
 
-### Regional Extreme
+### Isolated temperature spike
 
 ```text
-Station A → 45°C
-Station B → 44.5°C
-Station C → 45.2°C
+Station A -> 58.4 °C
+Nearby demo nodes -> approximately normal
+                         |
+                         v
+             Thermal Spike / ADC Surge Fault
 ```
 
-If multiple stations agree, spatial evidence can support a regional-event interpretation. Production decisions require real observations and validated meteorological rules.
+Use either the simulator's 20% temperature-fault injection or the dashboard's manual anomaly control.
 
----
+### Humidity or pressure fault classification
 
-## 🩺 Sensor Health
+The dashboard can inject humidity or pressure values outside the configured prototype ranges. The API's classification logic labels those values as humidity or pressure faults when the overall decision is anomalous.
 
-The prototype can derive a transparent health indicator from anomaly evidence.
+### Frozen reading
 
-Concept:
+Enable **Simulate Frozen Reading** in the dashboard. The selected parameter remains constant across refreshes; after three cycles the dashboard marks it as a frozen sensor and shows an estimated replacement path.
+
+### Regional extreme concept
+
+The project is designed around the distinction between an isolated outlier and a regional event. The current repository does not ingest real peer observations or calculate a live regional consensus, so this remains a design objective and presentation concept rather than a production spatial model.
+
+## Tests
+
+The two files under `ml_engine/` are executable smoke tests rather than pytest test-function suites:
+
+```powershell
+Push-Location ml_engine
+python test_model.py
+python test_real_model.py
+Pop-Location
+```
+
+`test_model.py` trains on generated in-memory data. `test_real_model.py` trains from `weather_normal_data.csv`. Both print a nominal prediction and a 58.4 °C anomaly prediction.
+
+If using pytest, run from `ml_engine` because the test files import `anomaly_model` as a local module:
+
+```powershell
+Push-Location ml_engine
+python -m pytest test_model.py test_real_model.py -q
+Pop-Location
+```
+
+The current project does not include automated API, dashboard, browser, persistence, load, or model-quality evaluation tests.
+
+## Transparency and limitations
+
+This section is important when presenting or extending the project.
+
+### Implemented in the current code
+
+- Isolation Forest anomaly scoring on temperature, humidity, and pressure.
+- Dew-point calculation and dew-point violation check.
+- Backend temperature bounds check.
+- Rule-based classification, action text, and fixed prototype confidence values.
+- In-memory latest-reading endpoint.
+- Streamlit dashboard with synthetic station network and demo controls.
+- Dashboard rolling-median imputation display for the latest anomalous point.
+- Static landing page with live endpoint polling.
+
+### Prototype or simulated behavior
+
+- The training CSV is synthetic, not official IMD or field-collected AWS data.
+- The five dashboard stations and their coordinates are configured demo records.
+- Peer-station/spatial results are text and display behavior; no real peer dataset is loaded by the backend.
+- Temporal checks are not implemented in the backend. The dashboard's frozen-reading mode is a presentation simulation.
+- The `shap_scores` response field contains hand-authored indicators; SHAP is not a dependency and no SHAP explainer runs.
+- `confidence_score` is not calibrated probability.
+- Health score is a transparent dashboard heuristic, not a certified sensor-health metric.
+- Imputation estimates a replacement data value and does not repair hardware.
+- Latest state is process-local and disappears on restart.
+
+### Production gaps
+
+Before operational use, the project would need real station metadata and telemetry, authenticated ingestion, schema/range validation, persistent storage, multi-worker-safe state, structured logging, monitoring, rate limiting, secret management, alert routing, model/version tracking, fault-labelled evaluation data, calibrated uncertainty, and validated meteorological rules.
+
+## Future scope
+
+1. Integrate real AWS observations, station metadata, coordinates, and sensor metadata.
+2. Build a true temporal feature store for rate-of-change, stuck-value, drift, noise, and intermittent-failure detection.
+3. Replace prototype peer text with real spatial residuals, interpolation, and regional consensus.
+4. Compare Isolation Forest with statistical baselines, autoencoders, and time-series models.
+5. Add edge-side checks for ESP32 or gateway deployments.
+6. Introduce a message broker and time-series database for durable streaming data.
+7. Add authentication, role-aware operations views, audit logs, and alert integrations.
+8. Evaluate the system using labelled normal and fault cases, with precision, recall, false-alarm rate, detection latency, and calibration measurements.
+
+## Contribution workflow
+
+Potential contribution areas include real AWS datasets, fault labelling, meteorological validation, ML evaluation, temporal analysis, spatial algorithms, edge deployment, persistence, MLOps, dashboard usability, and automated testing.
 
 ```text
-Normal + Consistent
-        ↓
-High health
-
-Repeated anomalies
-        ↓
-Health degradation
-
-Severe / persistent faults
-        ↓
-Critical status
+Clone -> create branch -> make focused change -> run checks
+      -> commit -> push -> open a pull request
 ```
 
-This is a prototype composite indicator, not a certified sensor-health measurement.
+Please keep synthetic/demo behavior clearly labeled when adding new features.
 
----
+## Project information
 
-## 🔐 Transparency
+| Item | Value |
+|---|---|
+| Project | SkyGuard AI |
+| SIH problem statement | PS 26073 |
+| Domain | Disaster Management |
+| Category | Software |
+| Status | SIH 2026 prototype / demonstration system |
+| Core technologies | Python, FastAPI, Streamlit, scikit-learn, Pandas, NumPy |
 
-The project distinguishes between:
+## 30-second explanation
 
-### Live/runtime data
+> SkyGuard AI is an intelligent quality-control layer for Automatic Weather Stations. It combines an Isolation Forest with dew-point and boundary checks to identify suspicious observations, explain the prototype decision, and show an estimated replacement value when a reading is flagged. The key idea is to avoid rejecting every extreme value: an isolated outlier may be a sensor fault, while agreement across real nearby stations could indicate a genuine regional extreme. The current implementation uses synthetic training and demo station data, and is designed to evolve toward validated AWS telemetry, persistent storage, real spatial checks, and production monitoring.
 
-Data received by the deployed API or simulator.
-
-### Prototype data
-
-Includes:
-
-- Synthetic historical series
-- Synthetic training data
-- Prototype peer baselines
-- Demonstration fault scenarios
-
-These should not be presented as official real-world observations.
-
----
-
-## ⚠️ Current Limitations
-
-1. Training data is synthetic.
-2. Real IMD AWS historical data is not yet integrated.
-3. Peer-station information is prototype/hardcoded.
-4. Spatial checking currently focuses on temperature for the configured prototype station.
-5. Temporal state is stored in memory.
-6. Restarting the backend resets previous-station state.
-7. There is no production database.
-8. Confidence is not calibrated probability.
-9. Sensor health is a prototype composite indicator.
-10. Self-healing is data estimation, not physical repair.
-11. Fault classification is currently rule-based.
-12. `sequence_id` is accepted but not yet used as a decision feature.
-13. Production requires authentication, persistence, monitoring, logging, rate limiting and secure secret management.
-
----
-
-## 🚀 Future Scope
-
-### Real AWS Data
-
-Integrate:
-
-- Real AWS telemetry
-- Historical observations
-- Station metadata
-- Coordinates
-- Sensor metadata
-
-### Advanced ML
-
-Evaluate:
-
-```text
-Isolation Forest
-+
-Autoencoders
-+
-Time-series models
-+
-Statistical methods
-```
-
-### Advanced Spatial Intelligence
-
-Add:
-
-- Real nearby stations
-- Spatial interpolation
-- Regional residuals
-- Weather-field consistency
-- Geographic clustering
-
-### Sensor Degradation
-
-Detect:
-
-```text
-Slow drift
-Frozen values
-Repeated spikes
-Increasing noise
-Bias
-Intermittent failure
-```
-
-### Edge AI
-
-Deploy lightweight QC/anomaly checks on ESP32 or another edge device.
-
-### Production Architecture
-
-```text
-AWS Sensors
-     ↓
-Edge Gateway
-     ↓
-Message Broker
-     ↓
-Streaming Pipeline
-     ↓
-QC + ML Engine
-     ↓
-Time-Series Database
-     ↓
-Alerting
-     ↓
-Monitoring Dashboard
-```
-
----
-
-## 🏆 Design Principle
-
-The key idea is **not simply detecting extreme values**.
-
-The system asks:
-
-```text
-Is it physically plausible?
-        +
-Did it change unexpectedly?
-        +
-Does it agree with nearby stations?
-        +
-Is it unusual according to ML?
-        ↓
-Combined evidence
-        ↓
-Explanation + recommended action
-```
-
-This helps reduce the risk of incorrectly rejecting genuine extreme weather observations.
-
----
-
-## 🎤 SIH Jury — 30 Second Explanation
-
-> **SkyGuard AI is an intelligent quality-control layer for Automatic Weather Stations. Instead of relying on one ML model or simply rejecting extreme values, we combine physical range checks, temporal consistency, spatial buddy checks and Isolation Forest anomaly detection. The evidence is fused to identify suspicious observations, explain why they were flagged, and recommend actions such as quarantining the reading or using an estimated replacement. The key idea is to distinguish an isolated sensor fault from a genuine regional weather extreme. Our current prototype uses synthetic training and peer data, with the architecture designed for integration with real AWS and IMD data.**
-
----
-
-## 📚 Important Terminology
+## Terminology
 
 | Term | Meaning |
 |---|---|
 | AWS | Automatic Weather Station |
-| QC | Quality Control |
-| ML | Machine Learning |
+| QC | Quality control |
+| ML | Machine learning |
 | API | Application Programming Interface |
-| FastAPI | Python framework for APIs |
-| Streamlit | Python dashboard framework |
-| Isolation Forest | Unsupervised anomaly detector |
-| Temporal Check | Previous-vs-current reading check |
-| Spatial/Buddy Check | Peer-station comparison |
-| Telemetry | Data transmitted by a device |
-| Anomaly | Unusual observation |
-| Quarantine | Prevent suspicious data from normal use |
-| Imputation | Estimating a replacement value |
-| XAI | Explainable AI |
+| Isolation Forest | Unsupervised tree-based anomaly detector |
+| Telemetry | Measurements transmitted by a device |
+| Anomaly | Observation that is unusual under the configured model/rules |
+| Imputation | Estimating a replacement value for a missing or rejected value |
+| XAI | Explainable artificial intelligence; here, prototype contribution indicators |
 
----
-
-## 🤝 Contribution
-
-Possible contribution areas:
-
-- Real AWS datasets
-- Fault-labelled datasets
-- ML models
-- Time-series analysis
-- Spatial algorithms
-- Edge AI
-- Database integration
-- MLOps
-- Dashboard
-- Testing and evaluation
-
-Workflow:
-
-```text
-Clone
- ↓
-Create branch
- ↓
-Make changes
- ↓
-Test
- ↓
-Commit
- ↓
-Push
- ↓
-Pull Request
-```
-
----
-
-## 📦 Project Status
-
-**SIH 2026 Prototype / Demonstration System**
-
-The architecture is intended to evolve from synthetic-data and simulator-based testing toward real AWS telemetry, validated models, persistent storage and production-grade monitoring.
-
----
-
-## 👩‍💻 Project Information
-
-**Project:** SkyGuard AI  
-**SIH Problem Statement:** PS 26073  
-**Domain:** Disaster Management  
-**Category:** Software  
-**Core Technologies:** Python, FastAPI, Streamlit, Scikit-learn, Pandas, NumPy
-
----
-
-> ### 🌦️ SkyGuard AI
-> **Detect the anomaly. Understand the cause. Protect the data.**
+> **SkyGuard AI: Detect the anomaly. Understand the cause. Protect the data.**
